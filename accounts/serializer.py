@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Profile
+from .models import User, Profile, UserSession
 from django.contrib.auth.password_validation import validate_password
 import os
 
@@ -317,3 +317,20 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
 class ChangeUserStatusSerializer(serializers.Serializer):
     is_active = serializers.BooleanField()
+    
+    
+    
+    
+class UserSessionSerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = UserSession
+        fields = [
+            "id",
+            "ip_address",
+            "user_agent",
+            "created",
+            "last_activity",
+            "is_active",
+            "device_name",
+        ]

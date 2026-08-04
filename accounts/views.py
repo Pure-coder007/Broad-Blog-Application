@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from .serializer import SignUpSerializer, ResendVerificationSerializer, ForgotPasswordSerializer, ChangePasswordSerializer, ResetPasswordSerializer, ProfileSerializer, UpdateProfileSerializer, ProfilePictureSerializer, FileUploadSerializer, DeleteAccountSerializer, ChangeEmailSerializer, ChangeUserRoleSerializer, AdminUserSerializer, ChangeUserStatusSerializer
+from .serializer import SignUpSerializer, ResendVerificationSerializer, ForgotPasswordSerializer, ChangePasswordSerializer, ResetPasswordSerializer, ProfileSerializer, UpdateProfileSerializer, ProfilePictureSerializer, FileUploadSerializer, DeleteAccountSerializer, ChangeEmailSerializer, ChangeUserRoleSerializer, AdminUserSerializer, ChangeUserStatusSerializer, UserSessionSerializer
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.request import Request
@@ -15,10 +15,11 @@ from django.db import transaction
 from django.utils.encoding import force_bytes, force_str
 from django.shortcuts import get_object_or_404
 from .tokens import email_verification_token
-from .utils import send_verification_email, create_audit_log
-from .models import User, PasswordHistory, AuditLog
+from .utils import send_verification_email, create_audit_log, get_client_ip
+from .models import User, PasswordHistory, AuditLog, UserSession
 from posts.models import Post
 from django.db.models import Q
+from user_agents import parse
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth.hashers import check_password
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
@@ -152,68 +153,152 @@ class VerifyEmailView(APIView):
         return Response({"message": "Invalid or expired verification link."}, status=status.HTTP_400_BAD_REQUEST)
 
 
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
 
-    def post(self, request: Request):
+    @transaction.atomic
+    def post(self, request):
         email = request.data.get("email")
         password = request.data.get("password")
 
-        # Check if the user exists
+        # ==========================
+        # Check if user exists
+        # ==========================
+
         try:
             user = User.objects.get(email=email)
-        except User.DoesNotExist:
-            return Response({"message": "Invalid email or password."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        
-        if user.is_deleted:
-            return Response({"message": "Account has already been deleted."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        
 
-        # Check if the email has been verified
+        except User.DoesNotExist:
+
+            return Response(
+                {
+                    "message": "Invalid email or password."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==========================
+        # Check if account is deleted
+        # ==========================
+
+        if user.is_deleted:
+
+            return Response(
+                {
+                    "message": "Account has already been deleted."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==========================
+        # Check email verification
+        # ==========================
+
         if not user.is_active:
-            return Response({"message": "Please verify your email before logging in."},
-                            status=status.HTTP_403_FORBIDDEN)
-        # Now authenticate the password
-        user = authenticate(email=email, password=password)
+
+            return Response(
+                {
+                    "message": "Please verify your email before logging in."
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ==========================
+        # Authenticate user
+        # ==========================
+
+        user = authenticate(
+            email=email,
+            password=password,
+        )
+
         if user is None:
-            return Response({"message": "Invalid email or password."}, status=status.HTTP_400_BAD_REQUEST, )
+
+            return Response(
+                {
+                    "message": "Invalid email or password."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==========================
+        # Generate JWT Tokens
+        # ==========================
+
         tokens = create_jwt_pair_for_user(user)
+
+        # ==========================
+        # Save Login Session
+        # ==========================
         
+        user_agent = request.META.get("HTTP_USER_AGENT", "")
+        
+        agent = parse(user_agent)
+        
+        parts = [
+            agent.browser.family,
+            agent.browser.version_string,
+            "on",
+            agent.os.family,
+            agent.os.version_string,
+        ]
+
+        device_name = " ".join(filter(None, parts))
+
+        UserSession.objects.create(
+            user=user,
+            refresh_token=tokens["refresh"],
+            ip_address=get_client_ip(request),
+            user_agent=user_agent,
+            device_name=device_name
+        )
+
+        # ==========================
+        # Create Audit Log
+        # ==========================
+
         create_audit_log(
             request=request,
             user=user,
             action="LOGIN",
+            status="SUCCESS",
             details={
-                "email": user.email
-            }
-        )
-        
-        
-        return Response({
-            "message": "Login successful.",
-            "user": {
                 "email": user.email,
-                "username": user.username,
             },
-            "token": tokens,
-        },
+        )
+
+        # ==========================
+        # Success Response
+        # ==========================
+
+        return Response(
+            {
+                "message": "Login successful.",
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "username": user.username,
+                    "role": user.role,
+                },
+                "token": tokens,
+            },
             status=status.HTTP_200_OK,
         )
-        
-        
 
-    def get(self, request: Request):
-        content = {
-            "user": str(request.user),
-            "auth": str(request.auth)
-        }
-        return Response(data=content, status=status.HTTP_200_OK)
+    def get(self, request):
 
+        return Response(
+            {
+                "user": str(request.user),
+                "auth": str(request.auth),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class ResendVerificationEmailView(APIView):
     permission_classes = [AllowAny]
@@ -365,23 +450,59 @@ class ResetPasswordView(APIView):
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request: Request):
+    @transaction.atomic
+    def post(self, request):
+        refresh_token = request.data.get("refresh")
+
+        if not refresh_token:
+            return Response(
+                {
+                    "message": "Refresh token is required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            refresh_token = request.data.get("refresh")
-            if not refresh_token:
-                return Response({
-                    "message": "Refresh Token is required"
-                }, status=status.HTTP_400_BAD_REQUEST)
             token = RefreshToken(refresh_token)
             token.blacklist()
 
-            return Response({
-                "message": "Logged out successfully"
-            }, status=status.HTTP_200_OK)
+            create_audit_log(
+                request=request,
+                user=request.user,
+                action="LOGOUT",
+                status="SUCCESS",
+                details={
+                    "email": request.user.email,
+                },
+            )
+
+            return Response(
+                {
+                    "message": "Logged out successfully."
+                },
+                status=status.HTTP_200_OK,
+            )
+
         except TokenError:
-            return Response({
-                "message": "Invalid or expired refresh token"
-            }, status=status.HTTP_400_BAD_REQUEST)
+
+            transaction.set_rollback(True)
+
+            create_audit_log(
+                request=request,
+                user=request.user,
+                action="LOGOUT",
+                status="FAILED",
+                details={
+                    "reason": "Invalid or expired refresh token",
+                },
+            )
+
+            return Response(
+                {
+                    "message": "Invalid or expired refresh token."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 
@@ -1250,6 +1371,89 @@ class RestoreUserView(APIView):
                     # "is_admin": user.is_admin,
                     "is_superuser": user.is_superuser,
                 }
+            },
+            status=status.HTTP_200_OK,
+        )
+        
+        
+
+
+class UserSessionListView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        sessions = UserSession.objects.filter(
+            user=request.user,
+            is_active=True,
+        ).order_by("-created")
+        
+        serializer = UserSessionSerializer(
+            sessions,
+            many=True,
+        )
+        
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="VIEW_SESSIONS",
+            status="SUCCESS",
+            details={
+                "total_sessions": sessions.count()
+            },
+        )
+        
+        return Response(
+            {
+                "message": "User sessions retrieved successfully.",
+                "count": sessions.count(),
+                "user_sessions": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+        
+        
+        
+        
+
+class LogoutAllDevicesView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    @transaction.atomic
+    def post(self, request):
+        sessions = UserSession.objects.filter(
+            user=request.user,
+            is_active=True,
+        )
+        
+        logged_out = 0
+        
+        for session in sessions:
+            try:
+                RefreshToken(session.refresh_token).blacklist()
+            except TokenError:
+                pass
+            
+            session.is_active = False
+            session.save(update_fields=["is_active"])
+            
+            logged_out += 1
+            
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="LOGOUT_ALL_DEVICES",
+            status="SUCCESS",
+            details={
+                "total_sessions": sessions.count(),
+                "sessions_logged_out": logged_out,
+            },
+        )
+        
+        return Response(
+            {
+                "message": "Logged out from all devices successfully.",
+                "total_sessions": sessions.count(),
+                "sessions_logged_out": logged_out,
             },
             status=status.HTTP_200_OK,
         )

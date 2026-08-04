@@ -33,4 +33,6 @@ urlpatterns = [
     path("admin/users/<uuid:user_id>/status/", views.ChangeUserStatusView.as_view(), name="change-user-status",),
     path("admin/users/<uuid:user_id>/delete/", views.DeleteUserView.as_view(), name="delete-user",),
     path("admin/users/<uuid:user_id>/restore/", views.RestoreUserView.as_view(), name="restore-user",),
+    path("sessions/", views.UserSessionListView.as_view(), name="user-sessions"),
+    path("logout-all/", views.LogoutAllDevicesView.as_view(), name="logout-all-devices"),
 ]

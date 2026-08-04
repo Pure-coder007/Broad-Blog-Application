@@ -66,6 +66,41 @@ class User(AbstractUser):
         return self.username
     
     
+    
+    
+class UserSession(models.Model):
+    id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False, unique=True
+    )    
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sessions",
+    )
+    
+    refresh_token = models.TextField()
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True
+    )
+    device_name = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    user_agent = models.TextField(blank=True,)
+    is_active = models.BooleanField(default=True)
+    created = models.DateTimeField(auto_now_add=True,)
+    last_activity = models.DateTimeField(auto_now=True,)
+    
+    class Meta:
+        ordering = ["-created"]
+        
+    def __str__(self):
+        return f"{self.user.email} ({self.ip_address})"
+    
+    
+
+    
 
 
 class Profile(models.Model):
@@ -125,6 +160,8 @@ class AuditLog(models.Model):
         ("CV_UPLOAD", "CV Upload"),
         ("EMAIL_CHANGE_REQUEST", "Email Change Request"),
         ("EMAIL_CHANGED", "Email Changed"),
+        ("LOGOUT", "Logout"),
+        ("LOGOUT_ALL_DEVICES", "Logout all devices"),
         ("ACCOUNT_DELETE", "Account Delete"),
         ("ADMIN_DASHBOARD", "Admin Dashboard"),
         ("ROLE_CHANGED", "Role Changed"),
