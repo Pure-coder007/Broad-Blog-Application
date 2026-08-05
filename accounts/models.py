@@ -199,3 +199,56 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.action}"
+    
+    
+    
+class Notification(models.Model):
+    
+    # Notification Types
+    WELCOME = "WELCOME"
+    EMAIL_VERIFIED = "EMAIL_VERIFIED"
+    PASSWORD_CHANGED = "PASSWORD_CHANGED"
+    ROLE_CHANGED = "ROLE_CHANGED"
+    ACCOUNT_RESTORED = "ACCOUNT_RESTORED"
+    ACCOUNT_DELETED = "ACCOUNT_DELETED"
+    SYSTEM = "SYSTEM"
+    
+    NOTIFICATION_TYPES = (
+        (WELCOME, "Welcome"),
+        (EMAIL_VERIFIED, "Email Verified"),
+        (PASSWORD_CHANGED, "Password Changed"),
+        (ROLE_CHANGED, "Role Changed"),
+        (ACCOUNT_RESTORED, "Account Restored"),
+        (ACCOUNT_DELETED, "Account Deleted"),
+        (SYSTEM, "System"),
+    )
+    
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        unique=True,
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE, 
+        related_name="notifications",
+        
+    )
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(
+        max_length=30,
+        choices=NOTIFICATION_TYPES,
+        default=SYSTEM,
+    )
+    is_read = models.BooleanField(default=False)
+    created = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ["-created"]
+        verbose_name = "Notification"
+        verbose_name_plural = "Notifications"
+        
+    def __str__(self):
+        return f"{self.user.email} - {self.title}"
