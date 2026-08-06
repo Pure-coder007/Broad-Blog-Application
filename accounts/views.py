@@ -10,13 +10,14 @@ from .tokens import create_jwt_pair_for_user
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 import os
+from .services import create_notification
 from django.utils import timezone
 from django.db import transaction
 from django.utils.encoding import force_bytes, force_str
 from django.shortcuts import get_object_or_404
 from .tokens import email_verification_token
 from .utils import send_verification_email, create_audit_log, get_client_ip
-from .models import User, PasswordHistory, AuditLog, UserSession
+from .models import User, PasswordHistory, AuditLog, UserSession, Notification
 from posts.models import Post
 from django.db.models import Q
 from user_agents import parse
@@ -77,6 +78,14 @@ class SignUpView(generics.GenericAPIView):
             verification_link = request.build_absolute_uri(
                 f"/auth/verify-email/{uid}/{token}/"
             )
+            
+            create_notification(
+                user=user,
+                title="Welcome to Broad Blog",
+                message=f"Thank you for creating an account. We're excited to have you with us!",
+                notification_type=Notification.WELCOME
+            )
+
 
             # ==========================
             # Send Email
@@ -99,7 +108,8 @@ class SignUpView(generics.GenericAPIView):
                     "registered_user": user.email,
                 },
             )
-
+            
+            
             return Response(
                 {
                     "message": (
@@ -145,9 +155,19 @@ class VerifyEmailView(APIView):
         if email_verification_token.check_token(user, token):
             user.is_active = True
             user.save(update_fields=["is_active"])
+            
+            create_notification(
+                user=user,
+                title="Email Verified",
+                message="Your email has been verified successfully.",
+                notification_type=Notification.EMAIL_VERIFIED,
+            )
+            
             return Response(
                 {"message": "Email verified successfully.", "data": {"email": user.email, "username": user.username}},
                 status=status.HTTP_200_OK)
+            
+        
 
         # Invalid or expired token
         return Response({"message": "Invalid or expired verification link."}, status=status.HTTP_400_BAD_REQUEST)
