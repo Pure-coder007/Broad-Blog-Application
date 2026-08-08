@@ -1513,3 +1513,95 @@ class NotificationListView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+        
+        
+        
+        
+class NotificationDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, notification_id):
+        try:
+            notification = Notification.objects.get(
+                id=notification_id,
+                user=request.user,
+            )
+        except Notification.DoesNotExist:
+            return Response({
+                "message": "Notification not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = NotificationSerializer(notification)
+        
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="VIEW_NOTIFICATION",
+            status="SUCCESS",
+            details={
+                "notification_id": str(notification_id),
+            },
+        )
+        
+        return Response(
+            {
+                "message": "Notification retrieved successfully.",
+                "notification": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+        
+        
+        
+        
+
+class MarkNotificationAsReadView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def patch(self, request, notification_id):
+        try:
+            notification = Notification.objects.get(
+                id=notification_id,
+                user=request.user,
+            )
+            
+        except Notification.DoesNotExist:
+            return Response({
+                "message": "Notification not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        if notification.is_read:
+            
+            serializer = NotificationSerializer(
+                notification
+            )
+            
+            return Response({
+                "message": "Notification is already marked as read.",
+                "notification": serializer.data,
+            }, status=status.HTTP_200_OK,)
+        
+        notification.is_read = True
+        notification.save(update_fields=["is_read"])
+        
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="MARK_NOTIFICATION_AS_READ",
+            status="SUCCESS",
+            details={
+                "notification_id": str(notification_id),
+            },
+        )
+        
+        serializer = NotificationSerializer(
+            notification
+        )
+        
+        return Response(
+            {
+                "message": "Notification marked as read successfully.",
+                "notification": serializer.data
+            },
+            status=status.HTTP_200_OK,
+        )

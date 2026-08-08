@@ -36,5 +36,7 @@ urlpatterns = [
     path("sessions/", views.UserSessionListView.as_view(), name="user-sessions"),
     path("logout-all/", views.LogoutAllDevicesView.as_view(), name="logout-all-devices"),
     path("notifications/", views.NotificationListView.as_view(), name="notifications"),
+    path("notifications/<uuid:notification_id>/", views.NotificationDetailView.as_view(), name="notification-detail"),
+    path("notifications/<uuid:notification_id>/mark-as-read/", views.MarkNotificationAsReadView.as_view(), name="mark-notification-as-read"),
 ]
 

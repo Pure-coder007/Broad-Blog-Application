@@ -169,6 +169,8 @@ class AuditLog(models.Model):
         ("VIEW_USER", "View Single User"),
         ("UPDATE_USER_STATUS", "Update User Status"),
         ("DELETE_USER", "Delete User"),
+        ("VIEW_NOTIFICATION", "View Notification"),
+        ("MARK_NOTIFICATION_AS_READ", "Mark Notification As Read"),
         ("VIEW_NOTIFICATIONS", "View Notifications"),
         ("RESTORE_USER", "Restore User"),
     )
