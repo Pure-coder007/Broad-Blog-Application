@@ -35,4 +35,6 @@ urlpatterns = [
     path("admin/users/<uuid:user_id>/restore/", views.RestoreUserView.as_view(), name="restore-user",),
     path("sessions/", views.UserSessionListView.as_view(), name="user-sessions"),
     path("logout-all/", views.LogoutAllDevicesView.as_view(), name="logout-all-devices"),
+    path("notifications/", views.NotificationListView.as_view(), name="notifications"),
 ]
+

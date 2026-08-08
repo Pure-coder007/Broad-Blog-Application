@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Profile, UserSession
+from .models import User, Profile, UserSession, Notification
 from django.contrib.auth.password_validation import validate_password
 import os
 
@@ -333,4 +333,19 @@ class UserSessionSerializer(serializers.ModelSerializer):
             "last_activity",
             "is_active",
             "device_name",
+        ]
+        
+        
+        
+class NotificationSerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = Notification
+        fields = [
+            "id",
+            "title",
+            "message",
+            "notification_type",
+            "is_read",
+            "created",
         ]

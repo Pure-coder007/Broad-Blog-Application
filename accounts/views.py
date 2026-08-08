@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from .serializer import SignUpSerializer, ResendVerificationSerializer, ForgotPasswordSerializer, ChangePasswordSerializer, ResetPasswordSerializer, ProfileSerializer, UpdateProfileSerializer, ProfilePictureSerializer, FileUploadSerializer, DeleteAccountSerializer, ChangeEmailSerializer, ChangeUserRoleSerializer, AdminUserSerializer, ChangeUserStatusSerializer, UserSessionSerializer
+from .serializer import SignUpSerializer, ResendVerificationSerializer, ForgotPasswordSerializer, ChangePasswordSerializer, ResetPasswordSerializer, ProfileSerializer, UpdateProfileSerializer, ProfilePictureSerializer, FileUploadSerializer, DeleteAccountSerializer, ChangeEmailSerializer, ChangeUserRoleSerializer, AdminUserSerializer, ChangeUserStatusSerializer, UserSessionSerializer, NotificationSerializer
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.request import Request
@@ -1474,6 +1474,42 @@ class LogoutAllDevicesView(APIView):
                 "message": "Logged out from all devices successfully.",
                 "total_sessions": sessions.count(),
                 "sessions_logged_out": logged_out,
+            },
+            status=status.HTTP_200_OK,
+        )
+        
+        
+        
+        
+
+class NotificationListView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        notification = Notification.objects.filter(
+            user=request.user
+        )
+        
+        serializer = NotificationSerializer(
+            notification,
+            many=True,
+        )
+        
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="VIEW_NOTIFICATIONS",
+            status="SUCCESS",
+            details={
+                "total_notifications": notification.count()
+            },
+        )
+        
+        return Response(
+            {
+                "message": "Notifications retrieved successfully.",
+                "count": notification.count(),
+                "notifications": serializer.data,
             },
             status=status.HTTP_200_OK,
         )
