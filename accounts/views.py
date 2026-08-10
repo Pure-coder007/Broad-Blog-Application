@@ -1605,3 +1605,125 @@ class MarkNotificationAsReadView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+        
+        
+
+class MarkAllNotificationsAsRead(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    @transaction.atomic
+    def patch(self, request):
+        notifications = Notification.objects.filter(
+            user=request.user,
+            is_read=False,
+        )
+        
+        unread_count = notifications.count()
+        if unread_count == 0:
+            
+            return Response({
+                "message": "All notifications are already marked as read.",
+                "updated_count": 0,
+            }, status=status.HTTP_200_OK,)
+            
+        
+        updated_count = notifications.update(
+            is_read=True
+        )
+        
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="MARK_ALL_NOTIFICATIONS_READ",
+            status="SUCCESS",
+            details={
+                "updated_count": updated_count,
+            },
+        )
+        
+        return Response({
+            "message": "All notifications marked as read successfully.",
+            "updated_count": unread_count
+        })
+        
+        
+        
+        
+        
+class DeleteNotificationView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    @transaction.atomic
+    def delete(self, request, notification_id):
+        try:
+            notification = Notification.objects.get(
+                id=notification_id,
+                user=request.user,
+            )
+        except Notification.DoesNotExist:
+            return Response({
+                "message": "Notification not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        notification_id = str(notification.id)
+        notification_title = notification.title
+        notification_type = notification.notification_type
+        
+        notification.delete()
+        
+        
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="DELETE_NOTIFICATION",
+            status="SUCCESS",
+            details={
+                "notification_id": notification_id,
+                "notification_title": notification_title,
+                "notification_type": notification_type,
+            },
+        )
+        
+        return Response({
+            "message": "Notification deleted successfully.",
+            "notification_id": notification_id
+        }, status=status.HTTP_200_OK,)
+        
+        
+        
+        
+
+
+class DeleteAllNotificationsView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    @transaction.atomic
+    def delete(self, request):
+        notifications = Notification.objects.filter(
+            user=request.user,
+        )
+        
+        notification_count = notifications.count()
+        
+        if notification_count == 0:
+            return Response({
+                "message": "You have no notifications to delete",
+                "deleted_notifications": 0,
+            }, status=status.HTTP_200_OK,)
+        
+        deleted_count, deleted_details = notifications.delete()
+        
+        create_audit_log(
+            request=request,
+            user=request.user,
+            action="DELETE_ALL_NOTIFICATIONS",
+            status="SUCCESS",
+            details={
+                "deleted_count": deleted_count,
+            },
+        )
+        
+        return Response({
+            "message": "All notifications deleted successfully.",
+            "deleted_notifications": deleted_count
+        })
