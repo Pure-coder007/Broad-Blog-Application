@@ -76,7 +76,6 @@ def create_suspicious_login_notification(*, user, score, reasons):
         f"Risk Score: {score}."
         f" Reasons: {reasons_text}"
     )
-    
 
     return create_notification(
         user=user,

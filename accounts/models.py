@@ -182,7 +182,7 @@ class AuditLog(models.Model):
         ("MARK_NOTIFICATION_AS_READ", "Mark Notification As Read"),
         ("VIEW_NOTIFICATIONS", "View Notifications"),
         ("RESTORE_USER", "Restore User"),
-        ("SUSPICIOUS_LOGIN", "Suspicious Login")
+        ("SUSPICIOUS_LOGIN", "Suspicious Login"),
     )
 
     user = models.ForeignKey(

@@ -193,6 +193,7 @@ class VerifyEmailView(APIView):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -211,16 +212,12 @@ class LoginView(APIView):
 
         try:
 
-            user = User.objects.get(
-                email=email
-            )
+            user = User.objects.get(email=email)
 
         except User.DoesNotExist:
 
             return Response(
-                {
-                    "message": "Invalid email or password."
-                },
+                {"message": "Invalid email or password."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -231,9 +228,7 @@ class LoginView(APIView):
         if user.is_deleted:
 
             return Response(
-                {
-                    "message": "Account has already been deleted."
-                },
+                {"message": "Account has already been deleted."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -244,12 +239,7 @@ class LoginView(APIView):
         if not user.is_active:
 
             return Response(
-                {
-                    "message": (
-                        "Please verify your email "
-                        "before logging in."
-                    )
-                },
+                {"message": ("Please verify your email " "before logging in.")},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -265,9 +255,7 @@ class LoginView(APIView):
         if user is None:
 
             return Response(
-                {
-                    "message": "Invalid email or password."
-                },
+                {"message": "Invalid email or password."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -300,9 +288,7 @@ class LoginView(APIView):
             agent.os.version_string,
         ]
 
-        device_name = " ".join(
-            filter(None, parts)
-        )
+        device_name = " ".join(filter(None, parts))
 
         # ==========================
         # Get IP Address
@@ -324,35 +310,19 @@ class LoginView(APIView):
         # TEMPORARY DEBUG
         # ==========================
 
-        print(
-            "\n=============================="
-        )
+        print("\n==============================")
 
         print("SECURITY RESULT")
 
-        print(
-            "Suspicious:",
-            security_result["suspicious"]
-        )
+        print("Suspicious:", security_result["suspicious"])
 
-        print(
-            "Score:",
-            security_result["score"]
-        )
+        print("Score:", security_result["score"])
 
-        print(
-            "Reasons:",
-            security_result["reasons"]
-        )
+        print("Reasons:", security_result["reasons"])
 
-        print(
-            "Previous session:",
-            security_result["previous_session"]
-        )
+        print("Previous session:", security_result["previous_session"])
 
-        print(
-            "==============================\n"
-        )
+        print("==============================\n")
 
         # ==========================
         # Create Login Session

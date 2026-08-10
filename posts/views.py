@@ -8,6 +8,8 @@ from rest_framework.permissions import (
     IsAuthenticatedOrReadOnly,
     IsAdminUser,
 )
+from django_filters.rest_framework import DjangoFilterBackend
+from .filters import PostFilter
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from .models import Post
@@ -36,31 +38,78 @@ class PostListCreateView(
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
 ):
-    # Rate limiting settings
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "posts"
-
     """
     Handles listing all posts and creating a new post.
     """
+
+    # ==========================
+    # Throttling
+    # ==========================
+
+    throttle_classes = [ScopedRateThrottle]
+
+    throttle_scope = "posts"
+
+    # ==========================
+    # Serializer
+    # ==========================
+
     serializer_class = PostSerializer
+
+    # ==========================
+    # Permissions
+    # ==========================
+
     permission_classes = [IsAuthenticatedOrReadOnly]
-    # permission_classes = [AuthorOrReadOnly]
-    
+
+    # ==========================
+    # Queryset
+    # ==========================
+
     queryset = Post.objects.all().order_by("-created")
 
+    # ==========================
+    # Filtering
+    # ==========================
+
+    filter_backends = [DjangoFilterBackend]
+
+    filterset_class = PostFilter
+
+    # ==========================
+    # GET
+    # ==========================
+
     def get(self, request, *args, **kwargs):
+        """
+        Retrieve posts with filtering,
+        searching, ordering and pagination.
+        """
+
         queryset = self.get_queryset()
 
-        # Search functionality
+        # ==========================
+        # Apply django-filter
+        # ==========================
+
+        queryset = self.filter_queryset(queryset)
+
+        # ==========================
+        # Search
+        # ==========================
+
         search = request.query_params.get("search")
 
         if search:
+
             queryset = queryset.filter(
                 Q(title__icontains=search) | Q(content__icontains=search)
             )
 
-        # Ordering functionality
+        # ==========================
+        # Ordering
+        # ==========================
+
         ordering = request.query_params.get("ordering")
 
         allowed_orderings = [
@@ -75,43 +124,74 @@ class PostListCreateView(
         ]
 
         if ordering in allowed_orderings:
+
             queryset = queryset.order_by(ordering)
+
         else:
+
             queryset = queryset.order_by("-created")
 
-        # Filtering functionality
-        author = request.query_params.get("author")
-        title = request.query_params.get("title")
-
-        if author:
-            queryset = queryset.filter(author__username=author)
-
-        if title:
-            queryset = queryset.filter(title__icontains=title)
+        # ==========================
+        # Pagination
+        # ==========================
 
         page = self.paginate_queryset(queryset)
 
         if page is not None:
+
             serializer = self.get_serializer(page, many=True)
+
             return self.get_paginated_response(serializer.data)
 
+        # ==========================
+        # No pagination
+        # ==========================
+
         serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # ==========================
+    # POST
+    # ==========================
 
     def post(self, request: Request, *args, **kwargs):
         """
         Create a new post.
         """
+
         serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(author=request.user)
+
+        # ==========================
+        # Validate
+        # ==========================
+
+        if not serializer.is_valid():
+
             return Response(
-                {"message": "Post created successfully", "data": serializer.data},
-                status=status.HTTP_201_CREATED,
+                {
+                    "message": "Validation failed",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # ==========================
+        # Create post
+        # ==========================
+
+        serializer.save(author=request.user)
+
+        # ==========================
+        # Response
+        # ==========================
+
         return Response(
-            {"message": "Validation failed", "errors": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST,
+            {
+                "message": "Post created successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 

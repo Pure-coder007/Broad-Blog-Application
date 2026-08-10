@@ -11,17 +11,13 @@ def detect_suspicious_login(
     ip_address,
     device_name,
 ):
-    
 
     # ==========================
     # Find the previous session
     # ==========================
 
     previous_session = (
-        UserSession.objects
-        .filter(user=user)
-        .order_by("-created")
-        .first()
+        UserSession.objects.filter(user=user).order_by("-created").first()
     )
 
     # ==========================
@@ -52,9 +48,7 @@ def detect_suspicious_login(
 
         score += 1
 
-        reasons.append(
-            "Login originated from a different IP address."
-        )
+        reasons.append("Login originated from a different IP address.")
 
     # ==========================
     # Check device
@@ -68,25 +62,19 @@ def detect_suspicious_login(
 
         score += 1
 
-        reasons.append(
-            "Login originated from a different device."
-        )
+        reasons.append("Login originated from a different device.")
 
     # ==========================
     # Check recent login
     # ==========================
 
-    recent_threshold = (
-        timezone.now() - timedelta(minutes=30)
-    )
+    recent_threshold = timezone.now() - timedelta(minutes=30)
 
     if previous_session.created >= recent_threshold:
 
         score += 1
 
-        reasons.append(
-            "A previous login occurred within the last 30 minutes."
-        )
+        reasons.append("A previous login occurred within the last 30 minutes.")
 
     # ==========================
     # Determine suspicious status
