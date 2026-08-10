@@ -1,5 +1,22 @@
 from django.shortcuts import render
-from .serializer import SignUpSerializer, ResendVerificationSerializer, ForgotPasswordSerializer, ChangePasswordSerializer, ResetPasswordSerializer, ProfileSerializer, UpdateProfileSerializer, ProfilePictureSerializer, FileUploadSerializer, DeleteAccountSerializer, ChangeEmailSerializer, ChangeUserRoleSerializer, AdminUserSerializer, ChangeUserStatusSerializer, UserSessionSerializer, NotificationSerializer
+from .serializer import (
+    SignUpSerializer,
+    ResendVerificationSerializer,
+    ForgotPasswordSerializer,
+    ChangePasswordSerializer,
+    ResetPasswordSerializer,
+    ProfileSerializer,
+    UpdateProfileSerializer,
+    ProfilePictureSerializer,
+    FileUploadSerializer,
+    DeleteAccountSerializer,
+    ChangeEmailSerializer,
+    ChangeUserRoleSerializer,
+    AdminUserSerializer,
+    ChangeUserStatusSerializer,
+    UserSessionSerializer,
+    NotificationSerializer,
+)
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.request import Request
@@ -10,7 +27,13 @@ from .tokens import create_jwt_pair_for_user
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 import os
-from .services import create_notification
+from .services import (
+    create_notification,
+    create_welcome_notification,
+    create_suspicious_login_notification,
+    create_email_verified_notification,
+    create_login_notification,
+)
 from django.utils import timezone
 from django.db import transaction
 from django.utils.encoding import force_bytes, force_str
@@ -20,6 +43,7 @@ from .utils import send_verification_email, create_audit_log, get_client_ip
 from .models import User, PasswordHistory, AuditLog, UserSession, Notification
 from posts.models import Post
 from django.db.models import Q
+from .security import detect_suspicious_login
 from user_agents import parse
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth.hashers import check_password
@@ -31,13 +55,11 @@ from .permissions import IsAdmin, IsAdminOrModerator, IsModerator
 today = timezone.now().date()
 
 
-
 # Paginator class
 class AdminUserPagination(PageNumberPagination):
     page_size = 5
     page_size_query_param = "page_size"
     max_page_size = 100
-
 
 
 # Create your views here.
@@ -78,22 +100,18 @@ class SignUpView(generics.GenericAPIView):
             verification_link = request.build_absolute_uri(
                 f"/auth/verify-email/{uid}/{token}/"
             )
-            
-            create_notification(
-                user=user,
-                title="Welcome to Broad Blog",
-                message=f"Thank you for creating an account. We're excited to have you with us!",
-                notification_type=Notification.WELCOME
-            )
 
+            create_welcome_notification(user)
 
             # ==========================
-            # Send Email
+            # Send Email after commit
             # ==========================
-            send_verification_email(
-                subject="Verify your email",
-                message=f"Click the link below:\n\n{verification_link}",
-                recipient=user.email,
+            transaction.on_commit(
+                lambda: send_verification_email(
+                    subject="Verify your email",
+                    message=f"Click the link below:\n\n{verification_link}",
+                    recipient=user.email,
+                )
             )
 
             # ==========================
@@ -108,8 +126,7 @@ class SignUpView(generics.GenericAPIView):
                     "registered_user": user.email,
                 },
             )
-            
-            
+
             return Response(
                 {
                     "message": (
@@ -143,37 +160,38 @@ class VerifyEmailView(APIView):
             # Retrieve the user
             user = User.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-            return Response({"message": "Invalid verification link."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        
+            return Response(
+                {"message": "Invalid verification link."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Check if the account has already been verified
         if user.is_active:
-            return Response({"message": "Email is already verified."}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"message": "Email is already verified."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         # Validate the verification token
         if email_verification_token.check_token(user, token):
             user.is_active = True
             user.save(update_fields=["is_active"])
-            
-            create_notification(
-                user=user,
-                title="Email Verified",
-                message="Your email has been verified successfully.",
-                notification_type=Notification.EMAIL_VERIFIED,
-            )
-            
+
+            create_email_verified_notification(user)
+
             return Response(
-                {"message": "Email verified successfully.", "data": {"email": user.email, "username": user.username}},
-                status=status.HTTP_200_OK)
-            
-        
+                {
+                    "message": "Email verified successfully.",
+                    "data": {"email": user.email, "username": user.username},
+                },
+                status=status.HTTP_200_OK,
+            )
 
         # Invalid or expired token
-        return Response({"message": "Invalid or expired verification link."}, status=status.HTTP_400_BAD_REQUEST)
-
-
-
+        return Response(
+            {"message": "Invalid or expired verification link."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
@@ -183,6 +201,7 @@ class LoginView(APIView):
 
     @transaction.atomic
     def post(self, request):
+
         email = request.data.get("email")
         password = request.data.get("password")
 
@@ -191,7 +210,10 @@ class LoginView(APIView):
         # ==========================
 
         try:
-            user = User.objects.get(email=email)
+
+            user = User.objects.get(
+                email=email
+            )
 
         except User.DoesNotExist:
 
@@ -223,7 +245,10 @@ class LoginView(APIView):
 
             return Response(
                 {
-                    "message": "Please verify your email before logging in."
+                    "message": (
+                        "Please verify your email "
+                        "before logging in."
+                    )
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -253,13 +278,20 @@ class LoginView(APIView):
         tokens = create_jwt_pair_for_user(user)
 
         # ==========================
-        # Save Login Session
+        # Get User Agent
         # ==========================
-        
-        user_agent = request.META.get("HTTP_USER_AGENT", "")
-        
+
+        user_agent = request.META.get(
+            "HTTP_USER_AGENT",
+            "",
+        )
+
+        # ==========================
+        # Parse Device Information
+        # ==========================
+
         agent = parse(user_agent)
-        
+
         parts = [
             agent.browser.family,
             agent.browser.version_string,
@@ -268,18 +300,113 @@ class LoginView(APIView):
             agent.os.version_string,
         ]
 
-        device_name = " ".join(filter(None, parts))
+        device_name = " ".join(
+            filter(None, parts)
+        )
+
+        # ==========================
+        # Get IP Address
+        # ==========================
+
+        ip_address = get_client_ip(request)
+
+        # ==========================
+        # Detect Suspicious Login
+        # ==========================
+
+        security_result = detect_suspicious_login(
+            user=user,
+            ip_address=ip_address,
+            device_name=device_name,
+        )
+
+        # ==========================
+        # TEMPORARY DEBUG
+        # ==========================
+
+        print(
+            "\n=============================="
+        )
+
+        print("SECURITY RESULT")
+
+        print(
+            "Suspicious:",
+            security_result["suspicious"]
+        )
+
+        print(
+            "Score:",
+            security_result["score"]
+        )
+
+        print(
+            "Reasons:",
+            security_result["reasons"]
+        )
+
+        print(
+            "Previous session:",
+            security_result["previous_session"]
+        )
+
+        print(
+            "==============================\n"
+        )
+
+        # ==========================
+        # Create Login Session
+        # ==========================
 
         UserSession.objects.create(
             user=user,
             refresh_token=tokens["refresh"],
-            ip_address=get_client_ip(request),
+            ip_address=ip_address,
             user_agent=user_agent,
-            device_name=device_name
+            device_name=device_name,
         )
 
         # ==========================
-        # Create Audit Log
+        # Create Login Notification
+        # ==========================
+
+        create_login_notification(
+            user=user,
+            device_name=device_name,
+            ip_address=ip_address,
+        )
+
+        # ==========================
+        # Handle Suspicious Login
+        # ==========================
+
+        if security_result["suspicious"]:
+
+            create_suspicious_login_notification(
+                user=user,
+                score=security_result["score"],
+                reasons=security_result["reasons"],
+            )
+
+            # ==========================
+            # Suspicious Login Audit
+            # ==========================
+
+            create_audit_log(
+                request=request,
+                user=user,
+                action="SUSPICIOUS_LOGIN",
+                status="WARNING",
+                details={
+                    "ip_address": ip_address,
+                    "device_name": device_name,
+                    "score": security_result["score"],
+                    "reasons": security_result["reasons"],
+                },
+            )
+
+        # ==========================
+        # Normal Login Audit
         # ==========================
 
         create_audit_log(
@@ -289,6 +416,8 @@ class LoginView(APIView):
             status="SUCCESS",
             details={
                 "email": user.email,
+                "ip_address": ip_address,
+                "device_name": device_name,
             },
         )
 
@@ -310,6 +439,10 @@ class LoginView(APIView):
             status=status.HTTP_200_OK,
         )
 
+    # ==========================
+    # GET Authenticated User
+    # ==========================
+
     def get(self, request):
 
         return Response(
@@ -320,6 +453,7 @@ class LoginView(APIView):
             status=status.HTTP_200_OK,
         )
 
+
 class ResendVerificationEmailView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -328,17 +462,25 @@ class ResendVerificationEmailView(APIView):
     def post(self, request: Request):
         serializer = ResendVerificationSerializer(data=request.data)
         if not serializer.is_valid():
-            return Response({"message": "Validation failed.", "errors": serializer.errors},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "Validation failed.", "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         email = serializer.validated_data["email"]
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            return Response({
-                "message": "If an account with that email exists and is not yet verified, a verification email has been sent."},
-                status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "message": "If an account with that email exists and is not yet verified, a verification email has been sent."
+                },
+                status=status.HTTP_200_OK,
+            )
         if user.is_active:
-            return Response({"message": "Email is already verified."}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"message": "Email is already verified."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = email_verification_token.make_token(user)
@@ -347,12 +489,17 @@ class ResendVerificationEmailView(APIView):
             f"/auth/verify-email/{uid}/{token}/"
         )
 
-        send_verification_email(
-            subject="Verify your email",
-            message=f"Click the link below:\n\n{verification_link}",
-            recipient=user.email,
+        transaction.on_commit(
+            lambda: send_verification_email(
+                subject="Verify your email",
+                message=f"Click the link below:\n\n{verification_link}",
+                recipient=user.email,
+            )
         )
-        return Response({"message": "Verification email sent successfully."}, status=status.HTTP_200_OK)
+        return Response(
+            {"message": "Verification email sent successfully."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class ForgotPasswordView(APIView):
@@ -364,10 +511,10 @@ class ForgotPasswordView(APIView):
         serializer = ForgotPasswordSerializer(data=request.data)
 
         if not serializer.is_valid():
-            return Response({
-                "message": "Validation failed",
-                "errors": serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "Validation failed", "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         email = serializer.validated_data["email"]
         try:
             user = User.objects.get(email=email)
@@ -385,9 +532,7 @@ class ForgotPasswordView(APIView):
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
 
-        reset_link = request.build_absolute_uri(
-            f"/auth/reset-password/{uid}/{token}/"
-        )
+        reset_link = request.build_absolute_uri(f"/auth/reset-password/{uid}/{token}/")
         print(uid)
         print("Reset link", reset_link)
 
@@ -396,20 +541,22 @@ class ForgotPasswordView(APIView):
             message=f"Click the link below:\n\n{reset_link}",
             recipient=user.email,
         )
-        
+
         user = request.user
-        
+
         create_audit_log(
             request=request,
             user=user,
             action="PASSWORD_RESET",
-            details={
-                "method": "reset-link"
-            }
-            )
-        
-        return Response({"message": "If an account with that email exists, a password reset link has been sent."},
-                        status=status.HTTP_200_OK)
+            details={"method": "reset-link"},
+        )
+
+        return Response(
+            {
+                "message": "If an account with that email exists, a password reset link has been sent."
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ResetPasswordView(APIView):
@@ -431,38 +578,26 @@ class ResetPasswordView(APIView):
             user = User.objects.get(pk=uid)
 
         except (
-                TypeError,
-                ValueError,
-                OverflowError,
-                User.DoesNotExist,
+            TypeError,
+            ValueError,
+            OverflowError,
+            User.DoesNotExist,
         ):
             return Response(
-                {
-                    "message": "Invalid password reset link."
-                },
+                {"message": "Invalid password reset link."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not default_token_generator.check_token(user, token):
             return Response(
-                {
-                    "message": "Invalid or expired password reset link."
-                },
+                {"message": "Invalid or expired password reset link."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        user.set_password(
-            serializer.validated_data["password"]
-        )
-        
-        
+        user.set_password(serializer.validated_data["password"])
 
         user.save(update_fields=["password"])
-        
-        
 
         return Response(
-            {
-                "message": "Password reset successfully."
-            },
+            {"message": "Password reset successfully."},
             status=status.HTTP_200_OK,
         )
 
@@ -476,9 +611,7 @@ class LogoutView(APIView):
 
         if not refresh_token:
             return Response(
-                {
-                    "message": "Refresh token is required."
-                },
+                {"message": "Refresh token is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -497,9 +630,7 @@ class LogoutView(APIView):
             )
 
             return Response(
-                {
-                    "message": "Logged out successfully."
-                },
+                {"message": "Logged out successfully."},
                 status=status.HTTP_200_OK,
             )
 
@@ -518,13 +649,9 @@ class LogoutView(APIView):
             )
 
             return Response(
-                {
-                    "message": "Invalid or expired refresh token."
-                },
+                {"message": "Invalid or expired refresh token."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-
 
 
 class ChangePasswordView(APIView):
@@ -533,20 +660,27 @@ class ChangePasswordView(APIView):
     throttle_scope = "change_password"
 
     def post(self, request: Request):
-        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
-        
+        serializer = ChangePasswordSerializer(
+            data=request.data, context={"request": request}
+        )
+
         serializer.is_valid(raise_exception=True)
-            
+
         user = request.user
-        old_password = serializer.validated_data['old_password']
-        new_password = serializer.validated_data['new_password']
-        
+        old_password = serializer.validated_data["old_password"]
+        new_password = serializer.validated_data["new_password"]
+
         if not user.check_password(old_password):
-            return Response({"message": "Invalid old password."}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"message": "Invalid old password."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
         if user.check_password(new_password):
-            return Response({"message": "New password cannot be the same as the old password."}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"message": "New password cannot be the same as the old password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         history = PasswordHistory.objects.filter(user=user).order_by("-created")[:5]
 
         for previous_password in history:
@@ -565,108 +699,95 @@ class ChangePasswordView(APIView):
 
             user.set_password(new_password)
             user.save(update_fields=["password"])
-            
 
             all_history = PasswordHistory.objects.filter(user=user).order_by("-created")
 
             if all_history.count() > 5:
                 all_history[5:].delete()
-           
-        user = request.user     
-                
+
+        user = request.user
+
         create_audit_log(
             request=request,
             user=user,
             action="PASSWORD_CHANGE",
-            details={
-                "method": "authenticated"
-            }
+            details={"method": "authenticated"},
         )
-        
-        return Response({"message": "Password changed successfully."}, status=status.HTTP_200_OK)
-    
-        
-    
-    
-    
 
+        return Response(
+            {"message": "Password changed successfully."}, status=status.HTTP_200_OK
+        )
 
 
 class ProfileView(APIView):
-    
+
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         serializer = ProfileSerializer(request.user.profile)
-        
-        return Response({
-            "message": "Profile retrieved successfully",
-            "profile": serializer.data
-        }, status=status.HTTP_200_OK)
-        
-        
-        
+
+        return Response(
+            {"message": "Profile retrieved successfully", "profile": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
 
 class UpdateProfileView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def patch(self, request):
         profile = request.user.profile
-        serializer = UpdateProfileSerializer(
-            profile,
-            data=request.data,
-            partial=True
-        )
-        
+        serializer = UpdateProfileSerializer(profile, data=request.data, partial=True)
+
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        
+
         user = request.user
-        
+
         create_audit_log(
             request=request,
             user=user,
             action="UPDATE_PROFILE",
-            details={
-                "updated_fields": list(serializer.validated_data.keys())
-
-            }
+            details={"updated_fields": list(serializer.validated_data.keys())},
         )
-        
-        return Response({
-            "message": "Profile updated successfully",
-            "profile": ProfileSerializer(profile).data,
-        }, status=status.HTTP_200_OK,)
-        
-        
-    
+
+        return Response(
+            {
+                "message": "Profile updated successfully",
+                "profile": ProfileSerializer(profile).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ProfilePictureUploadView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     parser_classes = [MultiPartParser, FormParser]
-    
+
     def patch(self, request):
         profile = request.user.profile
-        
+
         serializer = ProfilePictureSerializer(profile, data=request.data, partial=True)
-        
+
         serializer.is_valid(raise_exception=True)
-        
+
         # Delete old picture if one exists
         if profile.profile_picture:
             if os.path.isfile(profile.profile_picture.path):
                 os.remove(profile.profile_picture.path)
-            
+
         serializer.save()
-        
-        return Response({
-            "message": "Profile picture updated successfully",
-            "profile_picture": request.build_absolute_uri(profile.profile_picture.url)
-        }, status=status.HTTP_200_OK,)
-        
-        
+
+        return Response(
+            {
+                "message": "Profile picture updated successfully",
+                "profile_picture": request.build_absolute_uri(
+                    profile.profile_picture.url
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class FileUploadView(APIView):
@@ -675,20 +796,17 @@ class FileUploadView(APIView):
 
     def patch(self, request):
         profile = request.user.profile
-        
+
         # Check if a file was actually uploaded
         if not request.FILES.get("cv"):
             return Response(
-                {
-                    "message": "Please upload a CV."
-                },
+                {"message": "Please upload a CV."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-                    
+
         print("FILES:", request.FILES)
         print("DATA:", request.data)
         print("CONTENT TYPE:", request.content_type)
-                
 
         serializer = FileUploadSerializer(
             profile,
@@ -702,15 +820,15 @@ class FileUploadView(APIView):
         old_file = profile.cv
 
         profile = serializer.save()
-        
+
         print(profile.cv)
         print(profile.cv.name)
 
         if old_file and old_file != profile.cv:
             if os.path.isfile(old_file.path):
                 os.remove(old_file.path)
-        user = request.user       
-        
+        user = request.user
+
         create_audit_log(
             request=request,
             user=user,
@@ -718,9 +836,8 @@ class FileUploadView(APIView):
             details={
                 "filename": profile.cv.name,
                 "size": profile.cv.size,
-            }
+            },
         )
-        
 
         return Response(
             {
@@ -729,37 +846,32 @@ class FileUploadView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
-        
-        
-        
+
+
 class DeleteAccountView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def delete(self, request):
         serializer = DeleteAccountSerializer(
-            data = request.data,
-            context = {'request': request},
+            data=request.data,
+            context={"request": request},
         )
-        
+
         serializer.is_valid(raise_exception=True)
-        
+
         user = request.user
-        
+
         if user.is_deleted:
-                return Response({
-                    "message": "Account has already been deleted."
-                }, status=status.HTTP_400_BAD_REQUEST,)
-            
-        
+            return Response(
+                {"message": "Account has already been deleted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         with transaction.atomic():
             user.is_deleted = True
             user.is_active = False
             user.deleted_at = timezone.now()
-            
-            
+
             user.save(
                 update_fields=[
                     "is_deleted",
@@ -767,57 +879,52 @@ class DeleteAccountView(APIView):
                     "deleted_at",
                 ]
             )
-        
+
         user = request.user
-            
+
         create_audit_log(
             request=request,
             user=user,
             action="DELETE_ACCOUNT",
-            details={
-                "email": user.email
-            }
+            details={"email": user.email},
         )
-            
-        return Response({
-            "message": "Account deleted successfully"
-        }, status=status.HTTP_200_OK,)
-        
-        
-        
-        
+
+        return Response(
+            {"message": "Account deleted successfully"},
+            status=status.HTTP_200_OK,
+        )
+
 
 class ChangeEmailView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def patch(self, request):
         serializer = ChangeEmailSerializer(
-            data = request.data,
+            data=request.data,
             context={"request": request},
         )
-        
+
         serializer.is_valid(raise_exception=True)
         user = request.user
-        
+
         new_email = serializer.validated_data["new_email"]
-        
+
         user.pending_email = new_email
         user.save(update_fields=["pending_email"])
-        
+
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = email_verification_token.make_token(user)
-        
+
         verification_link = request.build_absolute_uri(
             f"/auth/confirm-email-change/{uid}/{token}"
         )
-        
-        
+
         send_verification_email(
             subject="Confirm your new email",
             message=f"Click the link below:\n\n{verification_link}",
             recipient=new_email,
         )
-        
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -826,68 +933,67 @@ class ChangeEmailView(APIView):
                 "pending_email": new_email,
             },
         )
-        
-        return Response({
-            "message": "A verification email has been sent to your new email address."
-        }, status=status.HTTP_200_OK,)
-        
-        
+
+        return Response(
+            {
+                "message": "A verification email has been sent to your new email address."
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class ConfirmEmailChangeView(APIView):
     permission_classes = [AllowAny]
-    
+
     def get(self, request, uidb64, token):
         try:
             uid = force_str(urlsafe_base64_decode(uidb64))
             user = User.objects.get(pk=uid)
-        
-        except(
+
+        except (
             TypeError,
             ValueError,
             OverflowError,
             User.DoesNotExist,
         ):
-        
-            return Response({
-                "message": "Invalid verification link"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+
+            return Response(
+                {"message": "Invalid verification link"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if not email_verification_token.check_token(user, token):
-            return Response({
-                "message": "Invalid or expired verification link"
-            })
-            
+            return Response({"message": "Invalid or expired verification link"})
+
         if not user.pending_email:
-            return Response({
-                "message": "No pending email change found"
-            }, status=status.HTTP_400_BAD_REQUEST,)
-            
-        
+            return Response(
+                {"message": "No pending email change found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         old_email = user.email
-        
+
         with transaction.atomic():
             user.email = user.pending_email
             user.pending_email = None
             user.save(update_fields=["email", "pending_email"])
-            
-            
+
         create_audit_log(
             request=request,
             user=user,
             action="EMAIL_CHANGED",
             status="SUCCESS",
-            details={
-                "old_email": old_email,
-                "new_email": user.email
-            }
+            details={"old_email": old_email, "new_email": user.email},
         )
-        
-        return Response({
-            "message": "Email changed successfully",
-            "email": user.email,
-        }, status=status.HTTP_200_OK,)
-        
-        
+
+        return Response(
+            {
+                "message": "Email changed successfully",
+                "email": user.email,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class AdminDashboardView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
@@ -901,41 +1007,23 @@ class AdminDashboardView(APIView):
 
         total_users = User.objects.count()
 
-        total_active_users = User.objects.filter(
-            is_active=True
-        ).count()
+        total_active_users = User.objects.filter(is_active=True).count()
 
-        total_inactive_users = User.objects.filter(
-            is_active=False
-        ).count()
+        total_inactive_users = User.objects.filter(is_active=False).count()
 
-        total_deleted_users = User.objects.filter(
-            is_deleted=True
-        ).count()
+        total_deleted_users = User.objects.filter(is_deleted=True).count()
 
-        total_admin_users = User.objects.filter(
-            role=User.ADMIN
-        ).count()
+        total_admin_users = User.objects.filter(role=User.ADMIN).count()
 
-        total_moderator_users = User.objects.filter(
-            role=User.MODERATOR
-        ).count()
+        total_moderator_users = User.objects.filter(role=User.MODERATOR).count()
 
-        total_normal_users = User.objects.filter(
-            role=User.USER
-        ).count()
+        total_normal_users = User.objects.filter(role=User.USER).count()
 
-        total_superusers = User.objects.filter(
-            is_superuser=True
-        ).count()
+        total_superusers = User.objects.filter(is_superuser=True).count()
 
-        today_registrations = User.objects.filter(
-            profile__created__date=today
-        ).count()
+        today_registrations = User.objects.filter(profile__created__date=today).count()
 
-        recent_users = User.objects.order_by(
-            "-profile__created"
-        )[:5]
+        recent_users = User.objects.order_by("-profile__created")[:5]
 
         # ==========================
         # Post Statistics
@@ -943,9 +1031,7 @@ class AdminDashboardView(APIView):
 
         total_posts = Post.objects.count()
 
-        todays_posts = Post.objects.filter(
-            created__date=today
-        ).count()
+        todays_posts = Post.objects.filter(created__date=today).count()
 
         # ==========================
         # Audit Log Statistics
@@ -953,9 +1039,7 @@ class AdminDashboardView(APIView):
 
         total_audit_logs = AuditLog.objects.count()
 
-        recent_audit_logs = AuditLog.objects.order_by(
-            "-created"
-        )[:5]
+        recent_audit_logs = AuditLog.objects.order_by("-created")[:5]
 
         # ==========================
         # Audit Log
@@ -1024,9 +1108,6 @@ class AdminDashboardView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
 
 
 class ChangeUserRoleView(APIView):
@@ -1042,39 +1123,28 @@ class ChangeUserRoleView(APIView):
         # Prevent changing your own role
         if request.user == user:
             return Response(
-                {
-                    "message": "You cannot change your own role."
-                },
+                {"message": "You cannot change your own role."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Prevent modifying superusers
         if user.is_superuser:
             return Response(
-                {
-                    "message": "You cannot modify a superuser."
-                },
+                {"message": "You cannot modify a superuser."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
         # Prevent assigning the same role
         if user.role == new_role:
             return Response(
-                {
-                    "message": f"{user.username} is already a {new_role}."
-                },
+                {"message": f"{user.username} is already a {new_role}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Only superusers can assign the Admin role
-        if (
-            new_role == User.ADMIN
-            and not request.user.is_superuser
-        ):
+        if new_role == User.ADMIN and not request.user.is_superuser:
             return Response(
-                {
-                    "message": "Only superusers can assign the Admin role."
-                },
+                {"message": "Only superusers can assign the Admin role."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1112,8 +1182,7 @@ class ChangeUserRoleView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
+
 
 class AdminUserListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
@@ -1125,30 +1194,28 @@ class AdminUserListView(APIView):
         is_active = request.query_params.get("is_active")
         is_deleted = request.query_params.get("is_deleted")
         ordering = request.query_params.get("ordering", "-date_joined")
-        
 
         search = request.query_params.get("search")
 
         if search:
             users = users.filter(
-                Q(username__icontains=search) |
-                Q(email__icontains=search) |
-                Q(first_name__icontains=search) |
-                Q(last_name__icontains=search)
+                Q(username__icontains=search)
+                | Q(email__icontains=search)
+                | Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
             )
 
         users = users.order_by("-date_joined")
-        
-        
+
         if role:
             users = users.filter(role=role.upper())
-        
+
         if is_active:
             users = users.filter(is_active=is_active.lower() == "true")
-        
+
         if is_deleted:
             users = users.filter(is_deleted=is_deleted.lower() == "true")
-            
+
         allowed_orderings = [
             "username",
             "-username",
@@ -1157,23 +1224,19 @@ class AdminUserListView(APIView):
             "date_joined",
             "-date_joined",
             "role",
-            "-role"
-        ]   
-        
+            "-role",
+        ]
+
         if ordering in allowed_orderings:
             users = users.order_by(ordering)
         else:
             users = users.order_by("-date_joined")
-        
-        
+
         # serializer = AdminUserSerializer(users, many=True)
         paginator = AdminUserPagination()
-        
-        paginated_users = paginator.paginate_queryset(
-            users,
-            request
-        )
-        
+
+        paginated_users = paginator.paginate_queryset(users, request)
+
         serializer = AdminUserSerializer(paginated_users, many=True)
 
         create_audit_log(
@@ -1193,11 +1256,6 @@ class AdminUserListView(APIView):
                 "users": serializer.data,
             }
         )
-        
-        
-        
-
-
 
 
 class AdminUserDetailView(APIView):
@@ -1206,7 +1264,7 @@ class AdminUserDetailView(APIView):
     def get(self, request, user_id):
         user = get_object_or_404(User, id=user_id)
         serializer = AdminUserSerializer(user)
-        
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1217,7 +1275,7 @@ class AdminUserDetailView(APIView):
                 "user_id": str(user.id),
             },
         )
-        
+
         return Response(
             {
                 "message": "User retrieved successfully.",
@@ -1225,38 +1283,38 @@ class AdminUserDetailView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
-        
+
 
 class ChangeUserStatusView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
-    
+
     def patch(self, request, user_id):
         user = get_object_or_404(User, id=user_id)
-        
+
         # Prevent an admin from disabling themselves
         if user == request.user:
-            return Response({
-                "message": "You cannot change your own account status"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"message": "You cannot change your own account status"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = ChangeUserStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
         old_status = user.is_active
         new_status = serializer.validated_data["is_active"]
-        
+
         if old_status == new_status:
-            return Response({
-                "message": f"User is already {'active' if new_status else 'inactive'}"
-            }, status=status.HTTP_400_BAD_REQUEST,)
-        
-        
+            return Response(
+                {
+                    "message": f"User is already {'active' if new_status else 'inactive'}"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user.is_active = new_status
         user.save(update_fields=["is_active"])
-        
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1268,7 +1326,7 @@ class ChangeUserStatusView(APIView):
                 "new_status": new_status,
             },
         )
-        
+
         return Response(
             {
                 "message": "User status updated successfully.",
@@ -1286,44 +1344,40 @@ class ChangeUserStatusView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
+
+
 class DeleteUserView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
-    
+
     def patch(self, request, user_id):
         user = get_object_or_404(User, id=user_id)
-        
-        
+
         # Prevent deleting yourself
         if user == request.user:
-            return Response({
-                "message": "You cannot delete your own account"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"message": "You cannot delete your own account"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if user.is_deleted:
-            return Response({
-                "message": "User has already been deleted"
-            }, status=status.HTTP_400_BAD_REQUEST)
-            
-            
+            return Response(
+                {"message": "User has already been deleted"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user.is_deleted = True
         user.is_active = False
         user.deleted_at = timezone.now()
         user.save(update_fields=["is_deleted", "is_active", "deleted_at"])
-        
+
         create_audit_log(
             request=request,
             user=request.user,
             action="DELETE_USER",
             status="SUCCESS",
-            details={
-                "deleted_user": user.email,
-                "deleted_by": request.user.email
-            },
+            details={"deleted_user": user.email, "deleted_by": request.user.email},
         )
-        
+
         return Response(
             {
                 "message": "User deleted successfully.",
@@ -1337,46 +1391,46 @@ class DeleteUserView(APIView):
                     "deleted_at": user.deleted_at,
                     # "is_admin": user.is_admin,
                     "is_superuser": user.is_superuser,
-                }
+                },
             },
             status=status.HTTP_200_OK,
         )
-        
 
 
 class RestoreUserView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
-    
+
     def patch(self, request, user_id):
         user = get_object_or_404(User, id=user_id)
-        
+
         if user == request.user:
-            return Response({
-                "message": "You cannot restore your own account"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"message": "You cannot restore your own account"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if not user.is_deleted:
-            return Response({
-                "message": "This user is not deleted"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"message": "This user is not deleted"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user.is_deleted = False
         user.is_active = True
         user.deleted_at = None
         user.restored_at = timezone.now()
-        user.save(update_fields=["is_deleted", "is_active", "deleted_at", "restored_at"])
-        
+        user.save(
+            update_fields=["is_deleted", "is_active", "deleted_at", "restored_at"]
+        )
+
         create_audit_log(
             request=request,
             user=request.user,
             action="RESTORE_USER",
             status="SUCCESS",
-            details={
-                "restored_user": user.email,
-                "restored_by": request.user.email
-            },
+            details={"restored_user": user.email, "restored_by": request.user.email},
         )
-        
+
         return Response(
             {
                 "message": "User restored successfully.",
@@ -1390,38 +1444,34 @@ class RestoreUserView(APIView):
                     "restored_at": user.restored_at,
                     # "is_admin": user.is_admin,
                     "is_superuser": user.is_superuser,
-                }
+                },
             },
             status=status.HTTP_200_OK,
         )
-        
-        
 
 
 class UserSessionListView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         sessions = UserSession.objects.filter(
             user=request.user,
             is_active=True,
         ).order_by("-created")
-        
+
         serializer = UserSessionSerializer(
             sessions,
             many=True,
         )
-        
+
         create_audit_log(
             request=request,
             user=request.user,
             action="VIEW_SESSIONS",
             status="SUCCESS",
-            details={
-                "total_sessions": sessions.count()
-            },
+            details={"total_sessions": sessions.count()},
         )
-        
+
         return Response(
             {
                 "message": "User sessions retrieved successfully.",
@@ -1430,34 +1480,31 @@ class UserSessionListView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
-        
+
 
 class LogoutAllDevicesView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     @transaction.atomic
     def post(self, request):
         sessions = UserSession.objects.filter(
             user=request.user,
             is_active=True,
         )
-        
+
         logged_out = 0
-        
+
         for session in sessions:
             try:
                 RefreshToken(session.refresh_token).blacklist()
             except TokenError:
                 pass
-            
+
             session.is_active = False
             session.save(update_fields=["is_active"])
-            
+
             logged_out += 1
-            
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1468,7 +1515,7 @@ class LogoutAllDevicesView(APIView):
                 "sessions_logged_out": logged_out,
             },
         )
-        
+
         return Response(
             {
                 "message": "Logged out from all devices successfully.",
@@ -1477,34 +1524,27 @@ class LogoutAllDevicesView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
-        
+
 
 class NotificationListView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
-        notification = Notification.objects.filter(
-            user=request.user
-        )
-        
+        notification = Notification.objects.filter(user=request.user)
+
         serializer = NotificationSerializer(
             notification,
             many=True,
         )
-        
+
         create_audit_log(
             request=request,
             user=request.user,
             action="VIEW_NOTIFICATIONS",
             status="SUCCESS",
-            details={
-                "total_notifications": notification.count()
-            },
+            details={"total_notifications": notification.count()},
         )
-        
+
         return Response(
             {
                 "message": "Notifications retrieved successfully.",
@@ -1513,13 +1553,11 @@ class NotificationListView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
-        
+
+
 class NotificationDetailView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request, notification_id):
         try:
             notification = Notification.objects.get(
@@ -1527,12 +1565,12 @@ class NotificationDetailView(APIView):
                 user=request.user,
             )
         except Notification.DoesNotExist:
-            return Response({
-                "message": "Notification not found."
-            }, status=status.HTTP_404_NOT_FOUND)
-        
+            return Response(
+                {"message": "Notification not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+
         serializer = NotificationSerializer(notification)
-        
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1542,7 +1580,7 @@ class NotificationDetailView(APIView):
                 "notification_id": str(notification_id),
             },
         )
-        
+
         return Response(
             {
                 "message": "Notification retrieved successfully.",
@@ -1550,40 +1588,38 @@ class NotificationDetailView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-        
-        
-        
+
 
 class MarkNotificationAsReadView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def patch(self, request, notification_id):
         try:
             notification = Notification.objects.get(
                 id=notification_id,
                 user=request.user,
             )
-            
+
         except Notification.DoesNotExist:
-            return Response({
-                "message": "Notification not found."
-            }, status=status.HTTP_404_NOT_FOUND)
-        
-        if notification.is_read:
-            
-            serializer = NotificationSerializer(
-                notification
+            return Response(
+                {"message": "Notification not found."}, status=status.HTTP_404_NOT_FOUND
             )
-            
-            return Response({
-                "message": "Notification is already marked as read.",
-                "notification": serializer.data,
-            }, status=status.HTTP_200_OK,)
-        
+
+        if notification.is_read:
+
+            serializer = NotificationSerializer(notification)
+
+            return Response(
+                {
+                    "message": "Notification is already marked as read.",
+                    "notification": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         notification.is_read = True
         notification.save(update_fields=["is_read"])
-        
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1593,44 +1629,41 @@ class MarkNotificationAsReadView(APIView):
                 "notification_id": str(notification_id),
             },
         )
-        
-        serializer = NotificationSerializer(
-            notification
-        )
-        
+
+        serializer = NotificationSerializer(notification)
+
         return Response(
             {
                 "message": "Notification marked as read successfully.",
-                "notification": serializer.data
+                "notification": serializer.data,
             },
             status=status.HTTP_200_OK,
         )
-        
-        
+
 
 class MarkAllNotificationsAsRead(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     @transaction.atomic
     def patch(self, request):
         notifications = Notification.objects.filter(
             user=request.user,
             is_read=False,
         )
-        
+
         unread_count = notifications.count()
         if unread_count == 0:
-            
-            return Response({
-                "message": "All notifications are already marked as read.",
-                "updated_count": 0,
-            }, status=status.HTTP_200_OK,)
-            
-        
-        updated_count = notifications.update(
-            is_read=True
-        )
-        
+
+            return Response(
+                {
+                    "message": "All notifications are already marked as read.",
+                    "updated_count": 0,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        updated_count = notifications.update(is_read=True)
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1640,19 +1673,18 @@ class MarkAllNotificationsAsRead(APIView):
                 "updated_count": updated_count,
             },
         )
-        
-        return Response({
-            "message": "All notifications marked as read successfully.",
-            "updated_count": unread_count
-        })
-        
-        
-        
-        
-        
+
+        return Response(
+            {
+                "message": "All notifications marked as read successfully.",
+                "updated_count": unread_count,
+            }
+        )
+
+
 class DeleteNotificationView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     @transaction.atomic
     def delete(self, request, notification_id):
         try:
@@ -1661,17 +1693,16 @@ class DeleteNotificationView(APIView):
                 user=request.user,
             )
         except Notification.DoesNotExist:
-            return Response({
-                "message": "Notification not found."
-            }, status=status.HTTP_404_NOT_FOUND)
-        
+            return Response(
+                {"message": "Notification not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+
         notification_id = str(notification.id)
         notification_title = notification.title
         notification_type = notification.notification_type
-        
+
         notification.delete()
-        
-        
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1683,36 +1714,38 @@ class DeleteNotificationView(APIView):
                 "notification_type": notification_type,
             },
         )
-        
-        return Response({
-            "message": "Notification deleted successfully.",
-            "notification_id": notification_id
-        }, status=status.HTTP_200_OK,)
-        
-        
-        
-        
+
+        return Response(
+            {
+                "message": "Notification deleted successfully.",
+                "notification_id": notification_id,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class DeleteAllNotificationsView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     @transaction.atomic
     def delete(self, request):
         notifications = Notification.objects.filter(
             user=request.user,
         )
-        
+
         notification_count = notifications.count()
-        
+
         if notification_count == 0:
-            return Response({
-                "message": "You have no notifications to delete",
-                "deleted_notifications": 0,
-            }, status=status.HTTP_200_OK,)
-        
+            return Response(
+                {
+                    "message": "You have no notifications to delete",
+                    "deleted_notifications": 0,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         deleted_count, deleted_details = notifications.delete()
-        
+
         create_audit_log(
             request=request,
             user=request.user,
@@ -1722,8 +1755,10 @@ class DeleteAllNotificationsView(APIView):
                 "deleted_count": deleted_count,
             },
         )
-        
-        return Response({
-            "message": "All notifications deleted successfully.",
-            "deleted_notifications": deleted_count
-        })
+
+        return Response(
+            {
+                "message": "All notifications deleted successfully.",
+                "deleted_notifications": deleted_count,
+            }
+        )

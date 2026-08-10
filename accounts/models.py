@@ -38,17 +38,19 @@ class CustomUserManager(BaseUserManager):
 
 
 class User(AbstractUser):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
-    
+    id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False, unique=True
+    )
+
     USER = "USER"
     MODERATOR = "MODERATOR"
     ADMIN = "ADMIN"
-    
+
     ROLE_CHOICES = (
         ("USER", "User"),
         ("MODERATOR", "Moderator"),
         ("ADMIN", "Admin"),
-        )
+    )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default=USER)
     email = models.EmailField(max_length=80, unique=True)
     pending_email = models.EmailField(max_length=80, blank=True, null=True, unique=True)
@@ -64,89 +66,93 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username
-    
-    
-    
-    
+
+
 class UserSession(models.Model):
     id = models.UUIDField(
         primary_key=True, default=uuid.uuid4, editable=False, unique=True
-    )    
+    )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="sessions",
     )
-    
+
     refresh_token = models.TextField()
-    ip_address = models.GenericIPAddressField(
-        null=True,
-        blank=True
-    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
     device_name = models.CharField(
         max_length=255,
         blank=True,
     )
-    user_agent = models.TextField(blank=True,)
+    user_agent = models.TextField(
+        blank=True,
+    )
     is_active = models.BooleanField(default=True)
-    created = models.DateTimeField(auto_now_add=True,)
-    last_activity = models.DateTimeField(auto_now=True,)
-    
+    created = models.DateTimeField(
+        auto_now_add=True,
+    )
+    last_activity = models.DateTimeField(
+        auto_now=True,
+    )
+
     class Meta:
         ordering = ["-created"]
-        
+
     def __str__(self):
         return f"{self.user.email} ({self.ip_address})"
-    
-    
-
-    
 
 
 class Profile(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
-    
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile"
+    )
+
     first_name = models.CharField(max_length=100, blank=True)
     last_name = models.CharField(max_length=100, blank=True)
     bio = models.TextField(blank=True)
-    
+
     phone_number = models.CharField(max_length=20, blank=True)
     country = models.CharField(max_length=100, blank=True, db_index=True)
     city = models.CharField(max_length=100, blank=True, db_index=True)
     website = models.URLField(blank=True)
-    profile_picture = models.ImageField(upload_to=upload_profile_picture, blank=True, null=True,)
-    cv = models.FileField(upload_to=upload_cv, blank=True, null=True,)
+    profile_picture = models.ImageField(
+        upload_to=upload_profile_picture,
+        blank=True,
+        null=True,
+    )
+    cv = models.FileField(
+        upload_to=upload_cv,
+        blank=True,
+        null=True,
+    )
     date_of_birth = models.DateField(blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         ordering = ["-created"]
-    
+
     def __str__(self):
         return f"{self.user.email}'s Profile"
-    
-    
-    
-    
-
 
 
 class PasswordHistory(models.Model):
-    
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="password_history")
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="password_history",
+    )
     password = models.CharField(max_length=255)
     created = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         ordering = ["-created"]
-        
+
     def __str__(self):
         return f"{self.user.email} - {self.created}"
-    
-    
-    
-    
+
+
 class AuditLog(models.Model):
     ACTIONS = (
         ("LOGIN", "Login"),
@@ -176,24 +182,31 @@ class AuditLog(models.Model):
         ("MARK_NOTIFICATION_AS_READ", "Mark Notification As Read"),
         ("VIEW_NOTIFICATIONS", "View Notifications"),
         ("RESTORE_USER", "Restore User"),
+        ("SUSPICIOUS_LOGIN", "Suspicious Login")
     )
-    
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="audit_logs")
-    
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="audit_logs"
+    )
+
     action = models.CharField(max_length=30, choices=ACTIONS)
-    
+
     ip_address = models.GenericIPAddressField(blank=True, null=True)
-    
+
     user_agent = models.TextField(
         blank=True,
     )
-    
-    status = models.CharField(max_length=20, choices=[
-        ("SUCCESS", "Success"),
-        ("FAILED", "Failed"),
-    ], blank=True, default='SUCCESS')
-    
-    
+
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("SUCCESS", "Success"),
+            ("FAILED", "Failed"),
+        ],
+        blank=True,
+        default="SUCCESS",
+    )
+
     details = models.JSONField(default=dict, blank=True)
 
     created = models.DateTimeField(
@@ -205,11 +218,10 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.action}"
-    
-    
-    
+
+
 class Notification(models.Model):
-    
+
     # Notification Types
     WELCOME = "WELCOME"
     EMAIL_VERIFIED = "EMAIL_VERIFIED"
@@ -218,7 +230,9 @@ class Notification(models.Model):
     ACCOUNT_RESTORED = "ACCOUNT_RESTORED"
     ACCOUNT_DELETED = "ACCOUNT_DELETED"
     SYSTEM = "SYSTEM"
-    
+    LOGIN = "LOGIN"
+    SECURITY = "SECURITY"
+
     NOTIFICATION_TYPES = (
         (WELCOME, "Welcome"),
         (EMAIL_VERIFIED, "Email Verified"),
@@ -227,8 +241,10 @@ class Notification(models.Model):
         (ACCOUNT_RESTORED, "Account Restored"),
         (ACCOUNT_DELETED, "Account Deleted"),
         (SYSTEM, "System"),
+        (LOGIN, "Login"),
+        (SECURITY, "Security"),
     )
-    
+
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -237,9 +253,8 @@ class Notification(models.Model):
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE, 
+        on_delete=models.CASCADE,
         related_name="notifications",
-        
     )
     title = models.CharField(max_length=255)
     message = models.TextField()
@@ -250,11 +265,11 @@ class Notification(models.Model):
     )
     is_read = models.BooleanField(default=False)
     created = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         ordering = ["-created"]
         verbose_name = "Notification"
         verbose_name_plural = "Notifications"
-        
+
     def __str__(self):
         return f"{self.user.email} - {self.title}"

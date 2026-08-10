@@ -2,7 +2,12 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework import status, generics, mixins
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly, IsAdminUser
+from rest_framework.permissions import (
+    IsAuthenticated,
+    AllowAny,
+    IsAuthenticatedOrReadOnly,
+    IsAdminUser,
+)
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from .models import Post
@@ -21,9 +26,9 @@ class homepage(generics.GenericAPIView):
     permission_classes = [AllowAny]
 
     def get(self, request: Request, *args, **kwargs):
-        return Response({
-            "message": "Welcome to the SimpleGlog API"
-        }, status=status.HTTP_200_OK)
+        return Response(
+            {"message": "Welcome to the SimpleGlog API"}, status=status.HTTP_200_OK
+        )
 
 
 class PostListCreateView(
@@ -34,13 +39,14 @@ class PostListCreateView(
     # Rate limiting settings
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "posts"
-    
+
     """
     Handles listing all posts and creating a new post.
     """
     serializer_class = PostSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     # permission_classes = [AuthorOrReadOnly]
+    
     queryset = Post.objects.all().order_by("-created")
 
     def get(self, request, *args, **kwargs):
@@ -51,8 +57,7 @@ class PostListCreateView(
 
         if search:
             queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(content__icontains=search)
+                Q(title__icontains=search) | Q(content__icontains=search)
             )
 
         # Ordering functionality
@@ -66,7 +71,7 @@ class PostListCreateView(
             "author__username",
             "-author__username",
             "content",
-            "-content"
+            "-content",
         ]
 
         if ordering in allowed_orderings:
@@ -79,14 +84,10 @@ class PostListCreateView(
         title = request.query_params.get("title")
 
         if author:
-            queryset = queryset.filter(
-                author__username=author
-            )
+            queryset = queryset.filter(author__username=author)
 
         if title:
-            queryset = queryset.filter(
-                title__icontains=title
-            )
+            queryset = queryset.filter(title__icontains=title)
 
         page = self.paginate_queryset(queryset)
 
@@ -104,14 +105,14 @@ class PostListCreateView(
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             serializer.save(author=request.user)
-            return Response({
-                "message": "Post created successfully",
-                "data": serializer.data
-            }, status=status.HTTP_201_CREATED)
-        return Response({
-            "message": "Validation failed",
-            "errors": serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "Post created successfully", "data": serializer.data},
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(
+            {"message": "Validation failed", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 class PostRetrieveUpdateDeleteView(
@@ -123,6 +124,7 @@ class PostRetrieveUpdateDeleteView(
     """
     Handles retrieving, updating, and deleting a single post.
     """
+
     serializer_class = PostSerializer
     permission_classes = [AuthorOrReadOnly]
     queryset = Post.objects.all()
@@ -134,10 +136,10 @@ class PostRetrieveUpdateDeleteView(
         """
         post = self.get_object()
         serializer = self.get_serializer(post)
-        return Response({
-            "message": "Post retrieved successfully",
-            "data": serializer.data
-        }, status=status.HTTP_200_OK)
+        return Response(
+            {"message": "Post retrieved successfully", "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
 
     def put(self, request: Request, *args, **kwargs):
         """
@@ -147,14 +149,14 @@ class PostRetrieveUpdateDeleteView(
         serializer = self.get_serializer(post, data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response({
-                "message": "Post updated successfully",
-                "data": serializer.data
-            }, status=status.HTTP_200_OK)
-        return Response({
-            "message": "Validation failed",
-            "errors": serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "Post updated successfully", "data": serializer.data},
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {"message": "Validation failed", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     def patch(self, request: Request, *args, **kwargs):
         """
@@ -164,14 +166,17 @@ class PostRetrieveUpdateDeleteView(
         serializer = self.get_serializer(post, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response({
-                "message": "Post partially updated successfully",
-                "data": serializer.data
-            }, status=status.HTTP_200_OK)
-        return Response({
-            "message": "Validation failed",
-            "errors": serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "message": "Post partially updated successfully",
+                    "data": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {"message": "Validation failed", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     def delete(self, request: Request, *args, **kwargs):
         """
@@ -179,9 +184,9 @@ class PostRetrieveUpdateDeleteView(
         """
         post = self.get_object()
         post.delete()
-        return Response({
-            "message": "Post deleted successfully"
-        }, status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"message": "Post deleted successfully"}, status=status.HTTP_204_NO_CONTENT
+        )
 
 
 class ListPostForAuthorView(
@@ -196,6 +201,7 @@ class ListPostForAuthorView(
 
     def get(self, request, *args, **kwargs):
         return self.list(request, *args, **kwargs)
+
 
 # ============================================================
 # FUNCTION-BASED VIEWS (COMMENTED OUT - NOT IN USE)

@@ -12,9 +12,6 @@ def send_verification_email(subject, message, recipient):
     )
 
 
-
-
-
 def create_audit_log(
     request,
     user,
@@ -37,8 +34,8 @@ def create_audit_log(
         user_agent=request.META.get("HTTP_USER_AGENT", ""),
         details=details or {},
     )
-    
-    
+
+
 # Get user ip address
 def get_client_ip(request):
     x_fowarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
